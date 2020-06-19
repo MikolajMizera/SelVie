@@ -42,13 +42,16 @@ import numpy as np
 import pandas as pd
 from rdkit import Chem
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 import dash
 from dash.dependencies import Input, Output, State
 import dash_table
 import dash_core_components as dcc
 import dash_html_components as html
 
-from utils import parse_sdf, DrawAsBase64PNG
+from utils import parse_sdf, draw_base64, get_NN, speed_tests
 
 from time import time
 
@@ -95,7 +98,9 @@ app.layout = upload_div
 def update_output(contents, name, date):
     if contents is not None:
         mols, msg = parse_sdf(contents, name)
-        return msg
+        
+
+        return str(corrs)+str(timings)
 
 if __name__ == '__main__':
     app.run_server(debug=False)
