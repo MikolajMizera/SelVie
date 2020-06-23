@@ -51,7 +51,7 @@ import dash_table
 import dash_core_components as dcc
 import dash_html_components as html
 
-from utils import parse_sdf, draw_base64, get_NN, speed_tests
+from utils import parse_sdf, draw_base64, preprocess_mols
 
 from time import time
 
@@ -89,18 +89,37 @@ upload_div = html.Div([
     html.Div(id='output-data'),
     ])
 
+data_table = dash_table.DataTable(
+                                id='table',
+                                columns=[],
+                                merge_duplicate_headers=True,
+                                data={},
+                                row_selectable='single',
+                                selected_row_ids=[0],
+                                fixed_rows={'headers': True, 
+                                            'data': 0},
+                                style_header={'backgroundColor': 'white',
+                                              'fontWeight': 'bold'},
+                                style_cell={'padding': '5px', 
+                                            'minWidth': '40px', 
+                                            'width': '40px', 
+                                            'maxWidth': '40px'},
+                                filter_action='native',
+                                sort_action='native',
+                                style_table={'maxHeight': '400px'})
+
 app.layout = upload_div
-    
+
+
 @app.callback(Output('output-data', 'children'),
               [Input('upload_file', 'contents')],
               [State('upload_file', 'filename'),
                State('upload_file', 'last_modified')])
-def update_output(contents, name, date):
+def populate_table(contents, name, date):
     if contents is not None:
-        mols, msg = parse_sdf(contents, name)
-        
-
-        return str(corrs)+str(timings)
+        mols, msg, sess_id = parse_sdf(contents, name)
+        df = preprocess_mols(mols, sess_id)
+        return msg
 
 if __name__ == '__main__':
     app.run_server(debug=False)

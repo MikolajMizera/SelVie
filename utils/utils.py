@@ -2,17 +2,20 @@
 Utility functions for SelVie
 """
 from uuid import uuid4
-from os import remove
-from os.path import join
+from os import remove, makedirs
+from os.path import join, exists, isdir
 from time import time
 from base64 import b64encode, b64decode
 import numpy as np
+import pandas as pd
 
 from tqdm import tqdm
 from sklearn.metrics import pairwise_distances
 from rdkit.Chem import Draw, SDMolSupplier, rdFMCS, MolFromSmarts, RemoveHs
+from rdkit.Chem import SDWriter
 from rdkit.Chem.AllChem import GetMorganFingerprintAsBitVect
 from rdkit.Chem.Scaffolds.MurckoScaffold import GetScaffoldForMol
+
 
 
 def speed_tests(mols, fps_radius, fps_ns_bits):
@@ -33,7 +36,7 @@ def speed_tests(mols, fps_radius, fps_ns_bits):
     
     D_max = D_mats[np.argmax(fps_ns_bits)]
     
-    corrs = [np.mean([np.corrcoef(r1, r2)[0,1] for r1, r2 in zip(D, D_max)])
+    corrs = [np.mean([np.corrcoef(r1[:10], r2[:10])[0,1] for r1, r2 in zip(D, D_max)])
             for D in D_mats]
     
     return corrs, timings
@@ -76,7 +79,48 @@ def get_MCSs(test_mols, known_mols, nns_indices=None, murcko_scaff=False):
         
     return MCSs, MCS_matches, NN_mols, NN_MCS_matches
 
-def get_NNs(test_mols, known_mols, fps_radius, fps_nbits=128, order=0, nns=1):
+def preprocess_mols(mols, session_id):
+    
+    session_dir = join('uploads', session_id)
+    mols = np.array(mols)
+    df = pd.DataFrame([m.GetPropsAsDict() for m in mols])
+    df['NN'] = np.nan
+    
+    exp_cols = [c for c in df.columns if 'experimental' in c]
+    experiemntal_mask = np.any(~pd.isna(df[exp_cols]), 1)
+    
+    test_mols = mols[~experiemntal_mask]
+    known_mols = mols[experiemntal_mask]
+    
+    # get indices of NNs for molecules which don't have experiemntal data
+    if len(test_mols):
+        test_nns_idx = get_Tanimoto_NNs(test_mols, known_mols, 3)
+        df['NNs'][~experiemntal_mask.values] = test_nns_idx
+    
+    # get indices of NNs for molecules which have experiemntal data
+    if len(known_mols):
+        known_nns_idx = get_Tanimoto_NNs(known_mols, known_mols, 3, order=1)
+        df['NN'][experiemntal_mask.values] = known_nns_idx
+    
+    #Save each molecule to separate dataset
+    if exists(session_dir):
+        raise RuntimeError('The session directory %s already exists!'%session_dir)
+    else:
+        makedirs(session_dir)
+    
+    for idx, mol in zip(df.index, mols):
+       writer = SDWriter(join(session_dir, '%d.sdf'%idx))
+       mol.SetProp('NN', '%d'%df.loc[idx]['NN'])
+       writer.write(mol)
+       writer.close()
+      
+    del df['NN']
+    
+    return df
+    
+
+def get_Tanimoto_NNs(test_mols, known_mols, fps_radius, fps_nbits=512, order=0,
+                     nns=1):
     """Looks for nearest neighbour in known_mols for each molecule from 
     test_mols. The molecules are represented by Morgan fingerprints."""
     
@@ -111,12 +155,13 @@ def parse_sdf(contents, filename):
     
     content_type, content_string = contents.split(',')
     decoded = b64decode(content_string)
+    session_id = str(uuid4())
     
     try:
         if filename[-4:].lower()=='.sdf':
             
             # Generate random file name and save contents to a file
-            unique_fname = join('uploads', '%s.sdf'%str(uuid4()))
+            unique_fname = join('uploads', '%s.sdf'%session_id)
             with open(unique_fname, 'w') as fh:
                 fh.write(decoded.decode('utf-8'))
                 
@@ -131,12 +176,12 @@ def parse_sdf(contents, filename):
                 #This is not critical
                 print(e)
                 
-            return mols, 'Loaded %d/%d molecules'%(n_mols, n_sucess)
+            return mols, 'Loaded %d/%d mols'%(n_mols, n_sucess), session_id
         else:
-            return [], 'The file has a wrong format.'
+            return [], 'The file has a wrong format.', session_id
         
     except Exception as e:
         print(e)
-        return [], 'Error occured during processing of a file.'
+        return [], 'Error occured during processing of a file.', session_id
 
     
