@@ -56,15 +56,17 @@ def test_preprocess_mols(sdf_file, session_id):
         
     mols = SDMolSupplier(sdf_file, removeHs=False)
     mols = np.array([m for m in mols if m])
-    preprocess_mols(mols, session_id)
+    df = preprocess_mols(mols, session_id)
     
     try:
         rmtree(join('uploads', session_id))
     except Exception as e:
         print(e)
+        
+    return df
                     
 if __name__ == '__main__':
 #    time_fps('SelVie_ChEMBL.sdf', 'fps_timing.png', 3)
 #    test_MCS('SelVie_ChEMBL_test.sdf')
-    test_preprocess_mols('SelVie_ChEMBL_test.sdf', 'test')
+    df = test_preprocess_mols('SelVie_ChEMBL_test.sdf', 'test')
     

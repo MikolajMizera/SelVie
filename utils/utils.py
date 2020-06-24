@@ -95,7 +95,7 @@ def preprocess_mols(mols, session_id):
     # get indices of NNs for molecules which don't have experiemntal data
     if len(test_mols):
         test_nns_idx = get_Tanimoto_NNs(test_mols, known_mols, 3)
-        df['NNs'][~experiemntal_mask.values] = test_nns_idx
+        df.at[~experiemntal_mask.values, 'NN'] = test_nns_idx
     
     # get indices of NNs for molecules which have experiemntal data
     if len(known_mols):
@@ -114,9 +114,15 @@ def preprocess_mols(mols, session_id):
        writer.write(mol)
        writer.close()
       
-    del df['NN']
+    allowed_cols = ['experimental', 'prediction', 'error']
+    selected = [c for c in df.columns if np.any([ac in c for ac in allowed_cols])]
+    df = df[selected]
     
-    return df
+    sorted_cols = []
+    for r in sorted(set([c.split('_')[0] for c in df.columns])):
+        sorted_cols += ['%s_experimental'%r, '%s_prediction'%r, '%s_error'%r]
+    
+    return df[sorted_cols]
     
 
 def get_Tanimoto_NNs(test_mols, known_mols, fps_radius, fps_nbits=512, order=0,

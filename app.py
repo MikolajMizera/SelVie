@@ -46,6 +46,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 import dash
+from dash.exceptions import PreventUpdate
+
 from dash.dependencies import Input, Output, State
 import dash_table
 import dash_core_components as dcc
@@ -89,37 +91,38 @@ upload_div = html.Div([
     html.Div(id='output-data'),
     ])
 
-data_table = dash_table.DataTable(
-                                id='table',
-                                columns=[],
-                                merge_duplicate_headers=True,
-                                data={},
-                                row_selectable='single',
-                                selected_row_ids=[0],
-                                fixed_rows={'headers': True, 
-                                            'data': 0},
-                                style_header={'backgroundColor': 'white',
-                                              'fontWeight': 'bold'},
-                                style_cell={'padding': '5px', 
-                                            'minWidth': '40px', 
-                                            'width': '40px', 
-                                            'maxWidth': '40px'},
-                                filter_action='native',
-                                sort_action='native',
-                                style_table={'maxHeight': '400px'})
+data_table = dash_table.DataTable(id='table', 
+                                  data=[],
+                                  merge_duplicate_headers=True)
 
-app.layout = upload_div
+app.layout = html.Div([
+        upload_div,
+        dcc.Store(id='df-store', storage_type='memory'),
+        data_table])
 
 
-@app.callback(Output('output-data', 'children'),
+@app.callback(Output('df-store', 'data'),
               [Input('upload_file', 'contents')],
               [State('upload_file', 'filename'),
                State('upload_file', 'last_modified')])
-def populate_table(contents, name, date):
+def process_upload(contents, name, date):
     if contents is not None:
         mols, msg, sess_id = parse_sdf(contents, name)
-        df = preprocess_mols(mols, sess_id)
-        return msg
+        df = preprocess_mols(mols, sess_id).astype(float)
+        jsonfied = df.to_json(double_precision=3)
+        return jsonfied
+    else:
+        return []
+
+@app.callback([Output("table", "data"), Output('table', 'columns')],
+              [Input('df-store', 'modified_timestamp')],
+              [State('df-store', 'data')])
+def update_table(ts, data):
+    if ts is None:
+        raise PreventUpdate
+    df = pd.read_json(data)
+    cols = [{'name': n.split('_'), 'id': n} for n in df.columns]
+    return df.round(3).to_dict('records'), cols
 
 if __name__ == '__main__':
     app.run_server(debug=False)
