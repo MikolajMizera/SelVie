@@ -89,10 +89,11 @@ def preprocess_mols(mols, session_id):
     exp_cols = [c for c in df.columns if 'experimental' in c]
     experiemntal_mask = np.any(~pd.isna(df[exp_cols]), 1)
     
+    # TO DO - check if there is no issues with preserving order
     test_mols = mols[~experiemntal_mask]
     known_mols = mols[experiemntal_mask]
     
-    # get indices of NNs for molecules which don't have experiemntal data
+    # get indices of NNs for molecules that don't have experiemntal data
     if len(test_mols):
         test_nns_idx = get_Tanimoto_NNs(test_mols, known_mols, 3)
         df.at[~experiemntal_mask.values, 'NN'] = test_nns_idx
@@ -100,7 +101,7 @@ def preprocess_mols(mols, session_id):
     # get indices of NNs for molecules which have experiemntal data
     if len(known_mols):
         known_nns_idx = get_Tanimoto_NNs(known_mols, known_mols, 3, order=1)
-        df['NN'][experiemntal_mask.values] = known_nns_idx
+        df.at[experiemntal_mask.values, 'NN'] = known_nns_idx
     
     #Save each molecule to separate dataset
     if exists(session_dir):
@@ -108,6 +109,7 @@ def preprocess_mols(mols, session_id):
     else:
         makedirs(session_dir)
     
+    # Write id of Nearest Neighbour to SDF properties
     for idx, mol in zip(df.index, mols):
        writer = SDWriter(join(session_dir, '%d.sdf'%idx))
        mol.SetProp('NN', '%d'%df.loc[idx]['NN'])
@@ -126,7 +128,7 @@ def preprocess_mols(mols, session_id):
     
 
 def get_Tanimoto_NNs(test_mols, known_mols, fps_radius, fps_nbits=512, order=0,
-                     nns=1):
+                     nns=1, return_sim=False):
     """Looks for nearest neighbour in known_mols for each molecule from 
     test_mols. The molecules are represented by Morgan fingerprints."""
     
@@ -138,8 +140,12 @@ def get_Tanimoto_NNs(test_mols, known_mols, fps_radius, fps_nbits=512, order=0,
     known_mols_fps = np.array([get_fps(m) for m in known_mols])
 
     D = pairwise_distances(test_mols_fps, known_mols_fps)
+    sorted_ids = np.argsort(D)[:, order:order+nns]
     
-    return np.argsort(D)[:, order:order+nns]
+    if return_sim:
+        return sorted_ids, D[:, sorted_ids]
+    else:
+        return sorted_ids
     
 
 def draw_base64(mol, legend='', highlightAtoms=[], molSize=(200, 200)):

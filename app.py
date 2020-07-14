@@ -71,15 +71,15 @@ app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
 server = app.server
 
-upload_div = html.Div([
+upload_td = html.Td([
         dcc.Upload(
                 html.Div([
                     'Drag and drop SDF file or ',
-                    html.A('Select SDF file')                        
+                    html.A('select SDF file')                        
                 ]),
                 id='upload_file',
                 style={
-                    'width': '100%',
+                    'width': '300px',
                     'height': '60px',
                     'lineHeight': '60px',
                     'borderWidth': '1px',
@@ -96,31 +96,43 @@ data_table = dash_table.DataTable(id='table',
                                   data=[],
                                   merge_duplicate_headers=True)
 
-filters_div = html.Div([
-                html.Table([
-                        html.Tr([
-                                html.Td(dcc.Dropdown(id='main_rec_drop')),
-                                html.Td(dcc.Dropdown(id='secondary_rec_drop',
-                                                     multi=True))
-                                ]),
-                        html.Tr([
-                                html.Td(dcc.RangeSlider(id='sel_slider',
-                                                        min=0,
-                                                        max=1,
-                                                        step=0.01,
-                                                        value=[0, 1],
-                                                        marks={0:{'label':'0'},
-                                                               1:{'label':'1'}}),
-                                        colSpan=2),
-                                ])
-                            ], style = {'width': '100%'}),                
-                                
-                ], style={'width': '600px'})
+filters_td = html.Td([
+                html.Tr([
+                        html.Td(dcc.Dropdown(id='main_rec_drop'),
+                                style={'width': '100px'}),
+                        html.Td(dcc.Dropdown(id='secondary_rec_drop',
+                                             multi=True),
+                                style={'width': '400px'})
+                        ]),
+                html.Tr([
+                        html.Td(dcc.RangeSlider(id='sel_slider',
+                                                min=0,
+                                                max=1,
+                                                step=0.01,
+                                                value=[0, 1],
+                                                marks={0:{'label':'0'},
+                                                       1:{'label':'1'}}),
+                                colSpan=2,
+                                style={'border': 'none'}),
+                        ])
+            ])
+
+sim_td = html.Td(dcc.RangeSlider(id='sim_slider',
+                                  min=0,
+                                  max=1,
+                                  step=0.01,
+                                  value=[0, 1],
+                                  marks={0:{'label':'0'},
+                                         1:{'label':'1'}}),
+                style={'width': '400px'})
 
 app.layout = html.Div([
-        upload_div,
         dcc.Store(id='df-store', storage_type='memory'),
-        filters_div,
+        html.Table([html.Tr([html.Th('Upload'), 
+                            html.Th('Filter by selectivity'), 
+                            html.Th('Filter by similarity')]),
+                    html.Tr([upload_td, filters_td, sim_td])],
+                   style={'margin-bottom': '10px'}),        
         data_table])
 
 
@@ -165,25 +177,37 @@ def update_main_rec_drop(columns):
               [Input('main_rec_drop', 'value')],
               [State('table', 'columns')])
 def update_secondary_rec_drop(main_rec, columns):
+    
+    if not len(columns):
+        raise PreventUpdate
         
     columns = [c['id'] for c in columns]
     receptors = np.unique([c.split('_')[0] for c in columns])
     options = [{'label': r, 'value': r} for r in receptors if r!=main_rec]
-    return options, receptors[1:]
+    return options, [r['value'] for r in options]
 
 @app.callback([Output('sel_slider', 'min'),
                Output('sel_slider', 'max'),
                Output('sel_slider', 'value'),
                Output('sel_slider', 'marks')],
               [Input('secondary_rec_drop', 'value')],
-              [State('table', 'data'),
-               State('main_rec_drop', 'value')])
-def update_sel_slider(sec_rec, selected_df, main_rec):
-        
-    if (main_rec is None) or (sec_rec is None) or (selected_df is None):
+              [State('main_rec_drop', 'value'),
+               State('table', 'data')])
+def update_sel_slider(sec_rec, main_rec, selected_df):
+    
+    fired_by = dash.callback_context.triggered[0]['prop_id'].split('.')[0]
+    print(fired_by)
+    print(sec_rec, main_rec)
+    if (main_rec is None) or (selected_df is None) or (sec_rec is None):
         raise PreventUpdate
     
     df = pd.DataFrame(selected_df)
+    
+    if fired_by == 'main_rec_drop':
+        columns = [c for c in df.columns]
+        receptors = np.unique([c.split('_')[0] for c in columns])
+        sec_rec = [r for r in receptors if r!=main_rec]
+    
     preds_df = df[[c for c in df.columns if 'prediction' in c]]
     
     isin_cols = lambda x: [r in x for r in sec_rec]
@@ -195,8 +219,16 @@ def update_sel_slider(sec_rec, selected_df, main_rec):
     
     min_mark, max_mark =  [0, max_val] 
     marks = {n:{'label':'%.1f'%n} for n in np.arange(min_mark, max_mark, 0.2)} 
-    
-    return 0, max_val, [0, max_val], marks               
+    return 0, max_val, [0, max_val], marks 
 
+@app.callback([Output('sel_slider', 'min'),
+               Output('sel_slider', 'max'),
+               Output('sel_slider', 'value'),
+               Output('sel_slider', 'marks')],
+              [Input('table', 'data')],
+              [])
+def update_sim_slider(selected_df):
+    pass
+    
 if __name__ == '__main__':
     app.run_server(debug=False)
