@@ -2,8 +2,9 @@
 Utility functions for SelVie
 """
 from uuid import uuid4
+from ast import literal_eval
 from os import remove, makedirs
-from os.path import join, exists, isdir
+from os.path import join, split, exists, isdir
 from glob import glob
 from time import time
 from base64 import b64encode, b64decode
@@ -61,11 +62,11 @@ def get_MCSs(test_mols, known_mols, nns_indices=None, murcko_scaff=False):
     
     MCSs, MCS_matches, NN_mols, NN_MCS_matches  = [], [], [], []
     
-    for query_mol, nn_i in tqdm(list(zip(test_mols, nns_indices))):
+    for query_mol, nn_i in list(zip(test_mols, nns_indices)):
         
         known_subset = known_mols[nn_i]
         
-        query_MCS = [get_mcs(query_mol, m, f) for m in known_subset]
+        query_MCS = [get_mcs(query_mol, m, f) for m in tqdm(known_subset)]
         query_MCS_sim = [m.numAtoms for m in query_MCS]
         NN_mol = known_subset[np.argmax(query_MCS_sim)]
         mcs = query_MCS[np.argmax(query_MCS_sim)]        
@@ -138,15 +139,18 @@ def preprocess_mols(mols, session_id):
 
 def load_props(mols_dir):
     
-    props = [SDMolSupplier(f)[0].GetPropsAsDict()
-            for f in glob(join(mols_dir, '*.sdf'))]
+    props = []
+    for f in glob(join(mols_dir, '*.sdf')):
+        p = SDMolSupplier(f)[0].GetPropsAsDict()
+        p['id'] = split(f)[-1].replace('.sdf', '')
+        props.append(p)
     df = pd.DataFrame(props)
     
     # Limit dataframe only to necessary columns    
     sorted_cols = []
     for r in sorted(set([c.split('_')[0] for c in df.columns if 'prediction' in c])):
         sorted_cols += ['%s_experimental'%r, '%s_prediction'%r, '%s_error'%r]
-    sorted_cols = ['molId']+sorted_cols+['Similarity_Tanimoto', 'NN']
+    sorted_cols = ['molId']+sorted_cols+['Similarity_Tanimoto', 'NN', 'id']
     
     return df[sorted_cols]
 
@@ -170,7 +174,33 @@ def get_Tanimoto_NNs(test_mols, known_mols, fps_radius, fps_nbits=512, order=0,
         return sorted_ids, sorted_similarities
     else:
         return sorted_ids
+
+def MCS_NN_search(sdf_file):
     
+    sess_dir = split(sdf_file)[0]
+    mol = SDMolSupplier(sdf_file, removeHs=True)[0]
+    candidate_ids = literal_eval(mol.GetPropsAsDict()['NN'])
+    candidate_mols = [SDMolSupplier(join(sess_dir, '%d.sdf'%id), removeHs=True)[0]
+                        for id in candidate_ids]
+    MCSs, MCS_matches, NN_mols, NN_MCS_matches = get_MCSs([mol], candidate_mols)
+    mol_img = draw_base64(mol, highlightAtoms=MCS_matches[0])
+    nn_img = draw_base64(NN_mols[0], highlightAtoms=NN_MCS_matches[0])
+    return mol_img, nn_img
+    
+
+def get_NN_id(sdf_file):
+    
+    mol = SDMolSupplier(sdf_file, removeHs=True)[0]
+    return literal_eval(mol.GetPropsAsDict()['NN'])[0]
+
+def get_properties(sdf_file):
+    mol = SDMolSupplier(sdf_file, removeHs=True)[0]
+    return mol.GetPropsAsDict()
+
+def draw_structure(sdf_file, **kwargs):
+    
+    mol = SDMolSupplier(sdf_file, removeHs=True)[0]
+    return draw_base64(mol, **kwargs)
 
 def draw_base64(mol, legend='', highlightAtoms=[], molSize=(200, 200)):
     """A function to depict a moelcular structure and encode it as a

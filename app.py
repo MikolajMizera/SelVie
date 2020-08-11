@@ -37,11 +37,11 @@ properties:
     An URL address to an external database.    
 """
 
-from ast import literal_eval
 from os.path import join
 import numpy as np
 import pandas as pd
 from rdkit import Chem
+import json
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -54,7 +54,8 @@ import dash_table
 import dash_core_components as dcc
 import dash_html_components as html
 
-from utils import parse_sdf, draw_base64, preprocess_mols, load_props
+from utils import parse_sdf, draw_structure, preprocess_mols, load_props
+from utils import get_NN_id, MCS_NN_search
 
 from time import time
 
@@ -95,7 +96,25 @@ upload_td = html.Td([
 
 data_table = dash_table.DataTable(id='table', 
                                   data=[],
-                                  merge_duplicate_headers=True)
+                                  merge_duplicate_headers=True,
+                                  row_selectable='single',
+                                  selected_row_ids=[0],
+                                  fixed_rows={
+                                          'headers': True,
+                                          'data': 0
+                                          },
+                                  style_header={
+                                          'backgroundColor': 'white',
+                                          'fontWeight': 'bold'
+                                          },
+                                  style_cell={
+                                          'padding': '5px', 
+                                          'minWidth': '40px', 
+                                          'width': '40px', 
+                                          'maxWidth': '40px'
+                                          },
+                                  sort_action='native',
+                                  style_table={'maxHeight': '400px'})
 
 filters_td = html.Td([
                 html.Tr([
@@ -129,15 +148,21 @@ sim_td = html.Td(dcc.RangeSlider(id='sim_slider',
 
 app.layout = html.Div([
         dcc.Store(id='df-store', storage_type='memory'),
+        dcc.Store(id='sessid-store', storage_type='memory'),
         html.Table([html.Tr([html.Th('Upload'), 
                             html.Th('Filter by predicted selectivity'), 
                             html.Th('Filter by similarity')]),
                     html.Tr([upload_td, filters_td, sim_td])],
                    style={'margin-bottom': '10px'}),        
-        data_table])
+        data_table,
+        html.Table([html.Tr([html.Td(id='mol_view'),
+                             html.Td(id='tanimoto_view'),
+                             dcc.Loading(html.Td(id='mcs_view'))])])
+    ])
 
 
-@app.callback(Output('df-store', 'data'),
+@app.callback([Output('df-store', 'data'),
+               Output('sessid-store', 'data')],
               [Input('upload_file', 'contents')],
               [State('upload_file', 'filename'),
                State('upload_file', 'last_modified')])
@@ -147,10 +172,11 @@ def process_upload(contents, name, date):
         sess_dir = preprocess_mols(mols, sess_id)
         df = load_props(sess_dir)
         del df['NN']
+        
         jsonfied = df.to_json(double_precision=3)
-        return jsonfied
+        return jsonfied, json.dumps(sess_dir)
     else:
-        return []
+        return [], ''
 
 @app.callback([Output('main_rec_drop', 'options'),
                Output('main_rec_drop', 'value')],
@@ -280,5 +306,60 @@ def update_table(sel_range, sim_range, main_rec, sec_rec, data):
 
     return selected_df, cols
 
+@app.callback(
+    [Output('mol_view', 'children'),
+     Output('tanimoto_view', 'children')],
+    [Input('table', 'selected_rows'),
+     Input('table', 'data')],
+     [State('sessid-store', 'data')])
+def update_mol_tanimoto(idx, selected_df, sess_dir):
+    
+    try:
+        sess_dir = json.loads(sess_dir)
+    except:
+        raise PreventUpdate
+    
+    if idx is None:
+        raise PreventUpdate
+        
+    df = pd.DataFrame(selected_df) 
+    idx = idx[0]
+    row = df.iloc[idx]
+    
+    sdf_fname = join(sess_dir, '%d.sdf'%(row.id))
+    mol_img = 'data:image/png;base64,%s'%(draw_structure(sdf_fname))
+    
+    nn_sdf_fname = join(sess_dir, '%d.sdf'%(get_NN_id(sdf_fname)))
+    nn_mol_img = 'data:image/png;base64,%s'%(draw_structure(nn_sdf_fname))
+#    nn_props = get_properties(nn_sdf_fname)
+    
+    return html.Img(src=mol_img), html.Img(src=nn_mol_img)
+
+@app.callback(
+    Output('mcs_view', 'children'),
+    [Input('table', 'selected_rows'),
+     Input('table', 'data')],
+     [State('sessid-store', 'data')])
+def update_mcs(idx, selected_df, sess_dir):
+    
+    try:
+        sess_dir = json.loads(sess_dir)
+    except:
+        raise PreventUpdate
+    
+    if idx is None:
+        raise PreventUpdate
+        
+    df = pd.DataFrame(selected_df) 
+    idx = idx[0]
+    row = df.iloc[idx]
+    
+    sdf_fname = join(sess_dir, '%d.sdf'%(row.id))
+    mol_img, nn_img = MCS_NN_search(sdf_fname)
+    mol_img = 'data:image/png;base64,%s'%(mol_img)
+    nn_img = 'data:image/png;base64,%s'%(nn_img)
+    
+    return [html.Img(src=mol_img), html.Img(src=nn_img)]
+    
 if __name__ == '__main__':
     app.run_server(debug=False)
