@@ -37,6 +37,7 @@ properties:
     An URL address to an external database.    
 """
 
+from ast import literal_eval
 from os.path import join
 import numpy as np
 import pandas as pd
@@ -53,7 +54,7 @@ import dash_table
 import dash_core_components as dcc
 import dash_html_components as html
 
-from utils import parse_sdf, draw_base64, preprocess_mols
+from utils import parse_sdf, draw_base64, preprocess_mols, load_props
 
 from time import time
 
@@ -129,7 +130,7 @@ sim_td = html.Td(dcc.RangeSlider(id='sim_slider',
 app.layout = html.Div([
         dcc.Store(id='df-store', storage_type='memory'),
         html.Table([html.Tr([html.Th('Upload'), 
-                            html.Th('Filter by selectivity'), 
+                            html.Th('Filter by predicted selectivity'), 
                             html.Th('Filter by similarity')]),
                     html.Tr([upload_td, filters_td, sim_td])],
                    style={'margin-bottom': '10px'}),        
@@ -143,61 +144,69 @@ app.layout = html.Div([
 def process_upload(contents, name, date):
     if contents is not None:
         mols, msg, sess_id = parse_sdf(contents, name)
-        df = preprocess_mols(mols, sess_id).astype(float)
+        sess_dir = preprocess_mols(mols, sess_id)
+        df = load_props(sess_dir)
+        del df['NN']
         jsonfied = df.to_json(double_precision=3)
         return jsonfied
     else:
         return []
 
-@app.callback([Output('table', 'data'), 
-               Output('table', 'columns')],
+@app.callback([Output('main_rec_drop', 'options'),
+               Output('main_rec_drop', 'value')],
               [Input('df-store', 'data')])
-def update_table(data):
+def update_main_rec_drop(data):
     
     try:
         df = pd.read_json(data)
     except:
         raise PreventUpdate
-    
-    cols = [{'name': n.split('_'), 'id': n} for n in df.columns]
-    return df.round(3).to_dict('records'), cols
-
-@app.callback([Output('main_rec_drop', 'options'),
-               Output('main_rec_drop', 'value')],
-              [Input('table', 'columns')])
-def update_main_rec_drop(columns):
-    
-    columns = [c['id'] for c in columns]
-    receptors = np.unique([c.split('_')[0] for c in columns])
+       
+    receptors = np.unique([c.split('_')[0] for c in df.columns 
+                           if 'prediction' in c])
     options = [{'label': r, 'value': r} for r in receptors]
     return options, receptors[0]
 
 @app.callback([Output('secondary_rec_drop', 'options'),
                Output('secondary_rec_drop', 'value')],
               [Input('main_rec_drop', 'value')],
-              [State('table', 'columns')])
-def update_secondary_rec_drop(main_rec, columns):
+              [State('df-store', 'data')])
+def update_secondary_rec_drop(main_rec, data):
     
-    if not len(columns):
+    try:
+        df = pd.read_json(data)
+    except:
         raise PreventUpdate
         
-    columns = [c['id'] for c in columns]
-    receptors = np.unique([c.split('_')[0] for c in columns])
+    receptors = np.unique([c.split('_')[0] for c in df.columns
+                           if 'prediction' in c])
     options = [{'label': r, 'value': r} for r in receptors if r!=main_rec]
     return options, [r['value'] for r in options]
 
 @app.callback([Output('sel_slider', 'min'),
                Output('sel_slider', 'max'),
                Output('sel_slider', 'value'),
-               Output('sel_slider', 'marks')],
+               Output('sel_slider', 'marks'),
+               Output('sim_slider', 'min'),
+               Output('sim_slider', 'max'),
+               Output('sim_slider', 'value'),
+               Output('sim_slider', 'marks')],
               [Input('secondary_rec_drop', 'value')],
               [State('main_rec_drop', 'value'),
-               State('table', 'data')])
-def update_sel_slider(sec_rec, main_rec, selected_df):
+               State('df-store', 'data')])
+def update_sliders(sec_rec, main_rec, data):
     
+    try:
+        selected_df = pd.read_json(data)
+    except:
+        raise PreventUpdate
+        
     fired_by = dash.callback_context.triggered[0]['prop_id'].split('.')[0]
+    
+    ## Debug info
     print(fired_by)
     print(sec_rec, main_rec)
+    
     if (main_rec is None) or (selected_df is None) or (sec_rec is None):
         raise PreventUpdate
     
@@ -218,17 +227,58 @@ def update_sel_slider(sec_rec, main_rec, selected_df):
     max_val = deltas.max()
     
     min_mark, max_mark =  [0, max_val] 
-    marks = {n:{'label':'%.1f'%n} for n in np.arange(min_mark, max_mark, 0.2)} 
-    return 0, max_val, [0, max_val], marks 
-
-@app.callback([Output('sel_slider', 'min'),
-               Output('sel_slider', 'max'),
-               Output('sel_slider', 'value'),
-               Output('sel_slider', 'marks')],
-              [Input('table', 'data')],
-              [])
-def update_sim_slider(selected_df):
-    pass
+    marks = {n:{'label':'%.1f'%n} for n in np.arange(min_mark, max_mark, 0.5)} 
     
+    sel_updates = (0, max_val, [0, max_val], marks)
+    
+    similarities = df['Similarity_Tanimoto']
+    
+    max_val = similarities.max()
+    
+    min_mark, max_mark =  [0, max_val] 
+    marks = {n:{'label':'%.1f'%n} for n in np.arange(min_mark, max_mark, 0.2)} 
+    
+    sim_updates = (0, max_val, [0, max_val], marks)
+    
+    return  sel_updates+sim_updates
+
+
+@app.callback([Output('table', 'data'), 
+               Output('table', 'columns')],
+              [Input('sel_slider', 'value'),
+               Input('sim_slider', 'value')],
+               [State('main_rec_drop', 'value'),
+                State('secondary_rec_drop', 'value'),
+                State('df-store', 'data')])
+def update_table(sel_range, sim_range, main_rec, sec_rec, data):
+    
+    try:
+        df = pd.read_json(data)
+    except:
+        raise PreventUpdate
+    
+    # Apply selectivity filter
+    min_sel, max_sel = sel_range
+    
+    preds_df = df[[c for c in df.columns if 'prediction' in c]]
+    
+    isin_cols = lambda x: [r in x for r in sec_rec]
+    sec_rec_cols = [c for c in preds_df.columns if np.any(isin_cols(c))]
+    sec_rec_data = preds_df[sec_rec_cols]
+    
+    deltas = (-(sec_rec_data.T-preds_df['%s_prediction'%main_rec]).T).min(1)
+    deltas_mask = deltas >= min_sel
+    deltas_mask &= deltas <= max_sel
+    
+    # Apply similarity filter
+    min_sim, max_sim = sim_range
+    sim_mask = df['Similarity_Tanimoto'] >= min_sim
+    sim_mask &= df['Similarity_Tanimoto'] <= max_sim
+    
+    cols = [{'name': n.split('_'), 'id': n} for n in df.columns]
+    selected_df = df[sim_mask&deltas_mask].round(1).to_dict('records')
+
+    return selected_df, cols
+
 if __name__ == '__main__':
     app.run_server(debug=False)

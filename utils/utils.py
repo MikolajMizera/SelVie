@@ -4,6 +4,7 @@ Utility functions for SelVie
 from uuid import uuid4
 from os import remove, makedirs
 from os.path import join, exists, isdir
+from glob import glob
 from time import time
 from base64 import b64encode, b64decode
 import numpy as np
@@ -87,45 +88,67 @@ def preprocess_mols(mols, session_id):
     df['NN'] = np.nan
     
     exp_cols = [c for c in df.columns if 'experimental' in c]
+    # if any experiemntal value is known for a given molecule, the molecule is 
+    # assumed to be known
     experiemntal_mask = np.any(~pd.isna(df[exp_cols]), 1)
     
     # TO DO - check if there is no issues with preserving order
     test_mols = mols[~experiemntal_mask]
+    test_mols_ids = df.index[~experiemntal_mask]
     known_mols = mols[experiemntal_mask]
-    
+    known_mols_ids = df.index[experiemntal_mask]
+        
     # get indices of NNs for molecules that don't have experiemntal data
+    # ie. that were not previously tested molecules
     if len(test_mols):
-        test_nns_idx = get_Tanimoto_NNs(test_mols, known_mols, 3)
-        df.at[~experiemntal_mask.values, 'NN'] = test_nns_idx
+        test_nns_idx, similarity = get_Tanimoto_NNs(test_mols, known_mols, 3, 
+                                                    nns=50, return_sim=True)
+        test_nns_ids = test_mols_ids[test_nns_idx]
+        formatted = list(map(repr, test_nns_ids.tolist()))
+        df.at[~experiemntal_mask.values, 'NN'] = formatted
+        df.at[~experiemntal_mask.values, 'Similarity_Tanimoto'] = similarity[:,0]
     
-    # get indices of NNs for molecules which have experiemntal data
+    # get indices of NNs for molecules that have experiemntal data
     if len(known_mols):
-        known_nns_idx = get_Tanimoto_NNs(known_mols, known_mols, 3, order=1)
-        df.at[experiemntal_mask.values, 'NN'] = known_nns_idx
+        known_nns_idx, similarity = get_Tanimoto_NNs(known_mols, known_mols, 3, 
+                                                     order=1, nns=50,
+                                                     return_sim=True)
+        known_nns_ids = known_mols_ids[known_nns_idx]
+        formatted = list(map(repr, known_nns_ids.tolist()))
+        df.at[experiemntal_mask.values, 'NN'] = formatted
+        df.at[experiemntal_mask.values, 'Similarity_Tanimoto'] = similarity[:,0]
     
-    #Save each molecule to separate dataset
+    # Save molecules as dataset
+    ## Check if the dir already exists
     if exists(session_dir):
         raise RuntimeError('The session directory %s already exists!'%session_dir)
     else:
         makedirs(session_dir)
     
-    # Write id of Nearest Neighbour to SDF properties
+    ## Write id of Nearest Neighbour to SDF properties and save each mol to 
+    ## separate file, the filenames are equal to index in dataset
     for idx, mol in zip(df.index, mols):
        writer = SDWriter(join(session_dir, '%d.sdf'%idx))
-       mol.SetProp('NN', '%d'%df.loc[idx]['NN'])
+       mol.SetProp('NN', '%s'%df.loc[idx]['NN'])
+       mol.SetProp('Similarity_Tanimoto', '%s'%df.loc[idx]['Similarity_Tanimoto'])
        writer.write(mol)
        writer.close()
-      
-    allowed_cols = ['experimental', 'prediction', 'error']
-    selected = [c for c in df.columns if np.any([ac in c for ac in allowed_cols])]
-    df = df[selected]
+       
+    return session_dir
+
+def load_props(mols_dir):
     
+    props = [SDMolSupplier(f)[0].GetPropsAsDict()
+            for f in glob(join(mols_dir, '*.sdf'))]
+    df = pd.DataFrame(props)
+    
+    # Limit dataframe only to necessary columns    
     sorted_cols = []
-    for r in sorted(set([c.split('_')[0] for c in df.columns])):
+    for r in sorted(set([c.split('_')[0] for c in df.columns if 'prediction' in c])):
         sorted_cols += ['%s_experimental'%r, '%s_prediction'%r, '%s_error'%r]
+    sorted_cols = ['molId']+sorted_cols+['Similarity_Tanimoto', 'NN']
     
     return df[sorted_cols]
-    
 
 def get_Tanimoto_NNs(test_mols, known_mols, fps_radius, fps_nbits=512, order=0,
                      nns=1, return_sim=False):
@@ -139,11 +162,12 @@ def get_Tanimoto_NNs(test_mols, known_mols, fps_radius, fps_nbits=512, order=0,
     test_mols_fps = np.array([get_fps(m) for m in test_mols])
     known_mols_fps = np.array([get_fps(m) for m in known_mols])
 
-    D = pairwise_distances(test_mols_fps, known_mols_fps)
+    D = pairwise_distances(test_mols_fps, known_mols_fps, 'jaccard')
     sorted_ids = np.argsort(D)[:, order:order+nns]
+    sorted_similarities = 1-np.sort(D)[:, order:order+nns]
     
     if return_sim:
-        return sorted_ids, D[:, sorted_ids]
+        return sorted_ids, sorted_similarities
     else:
         return sorted_ids
     
